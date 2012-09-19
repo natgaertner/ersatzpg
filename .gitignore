@@ -1,0 +1,5 @@
+*.pyc
+*~
+*.swp
+*.csv
+!randoms_small.csv
