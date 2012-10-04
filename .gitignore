@@ -3,3 +3,4 @@
 *.swp
 *.csv
 !randoms_small.csv
+univ_settings.py

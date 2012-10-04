@@ -341,7 +341,7 @@ def process_table(table_conf, univ_conf, connection):
                 ctime += time.time()
                 bufs[table_conf['table']].close()
                 bufs[table_conf['table']] = StringIO()
-                csvw = csv.writer(bufs[table_conf['table']])
+                #csvw = csv.writer(bufs[table_conf['table']])
                 return ctime
 
         csvr = csv.reader(f, quotechar=quote_char, delimiter=field_sep)
@@ -366,6 +366,7 @@ def process_table(table_conf, univ_conf, connection):
                 for k,v in bufs.iteritems():
                     try:
                         ctime = copy_sql(k, ctime)
+                        csvw = csv.writer(bufs[table_conf['table']])
                     except Exception, error:
                         if univ_conf['debug']:
                             import traceback; print traceback.format_exc()
