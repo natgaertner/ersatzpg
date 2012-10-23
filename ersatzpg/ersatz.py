@@ -1,43 +1,13 @@
 ﻿from collections import defaultdict
 from itertools import izip
 from cStringIO import StringIO
-import psycopg2.psycopg1 as psycopg
-import re, imp, csv, sys, time
+import psycopg2 as psycopg
+import re, imp, csv, sys, time, select
 from utffile import utffile
 from create_partitions import permutation_tuple_generator
 
-def parse_config(config_file):
-    with open(config_file, 'r') as cf:
-        universal_config_dict = {'reformat_path':None, 'debug': False}
-        table_config_dict = defaultdict(lambda: {'copy_every':100000, 'format':'csv','field_sep':',','quotechar':'"'})
-        def parse_table_conf(tconf, tdict):
-            for l in tconf:
-                if l.startswith('#'): continue
-                if re.match(r'\}', l):
-                    if not tdict.has_key('table') or not tdict.has_key('filename') or not tdict.has_key('columns'):
-                        raise Exception('table config must contain table, filename, and columns')
-                    return tdict
-                m = re.match(r'(\w+)\s*=\s*(.+)', l)
-                if m:
-                    tdict.update([m.groups()])
-            if not tdict.has_key('table') or not tdict.has_key('filename') or not tdict.has_key('columns'):
-                raise Exception('table config must contain table, filename, and columns')
-            return tdict
-        for l in cf:
-            if l.startswith('#'): continue
-            m = re.match(r'(\w+)\s*\{', l)
-            if m:
-                table_config_dict[m.groups()[0]] = parse_table_conf(cf, table_config_dict[m.groups()[0]])
-            else:
-                m = re.match(r'(\w+)\s*=\s*(.+)', l)
-                if m:
-                    universal_config_dict.update([m.groups()])
-    if not universal_config_dict.has_key('user') or not universal_config_dict.has_key('db') or not universal_config_dict.has_key('pw'):
-        raise Exception('config must contain user, db, and pw for postgres db')
-    return universal_config_dict, table_config_dict
-
 def new_process_config(universal_config):
-    universal_config_dict = {'reformat_path':None, 'debug': False, 'use_utf': False, 'testonly': False}
+    universal_config_dict = {'reformat_path':None, 'debug': False, 'use_utf': False, 'testonly': False, 'parallel_load': ()}
     table_config_dict = defaultdict(lambda: {'copy_every':100000, 'format':'csv','field_sep':',','quotechar':'"'})
     universal_config_dict.update(universal_config)
     for t in universal_config_dict['tables']:
@@ -65,23 +35,6 @@ def db_connect(config):
     connstr.append("dbname=%s user=%s password=%s" % (config['db'], config['user'], config['pw']))
     return psycopg.connect(' '.join(connstr))
 
-def process_columns(table_conf, default_reformat_path):
-    r_path = table_conf['reformat_path'] if table_conf.has_key('reformat_path') else default_reformat_path
-    columns = table_conf['columns'].split(',')
-    numbered_columns = []
-    transformed_columns = []
-    for c in columns:
-        c = c.strip()
-        m = re.match(r'(\w+)\s*:\s*(\d+)', c)
-        if m:
-            numbered_columns.append((m.groups()[0], int(m.groups()[1]) - 1))
-        else:
-            m = re.match(r'(\w+(?:\s+\w+)*)\s*:\s*(\w+)\.(\w+)\((\d+(?:\s+\d+)*)\)', c)
-            if m:
-                transformed_columns.append((re.split(r'\s+', m.groups()[0]), function_lookup(m.groups()[1], m.groups()[2], r_path), [int(x) - 1 for x in re.split(r'\s+', m.groups()[3])]))
-    udcs = [tuple(s.strip() for s in t.split(':')) for t in table_conf['udcs'].split(',')] if table_conf.has_key('udcs') else []
-    return numbered_columns, transformed_columns, udcs
-
 def new_process_columns(table_conf):
     numbered_columns = []
     transformed_columns = []
@@ -105,7 +58,7 @@ def function_lookup(module_name, func_name, reformat_path):
     return module.__dict__[func_name]
 
 def process_data(row, numbered_columns, transformed_columns,udcs, key_values = []):
-    return [row[i] for name,i in numbered_columns] + [v for tr in transformed_columns for v in tr[1](*([row[i] for i in tr[2]] + (tr[3] if type(tr[3]) == list else [])), **(tr[3] if type(tr[3]) == dict else {}) )] + [i for name, i in udcs] + key_values
+    return [(row[i] if i < len(row) else None) for name,i in numbered_columns] + [v for tr in transformed_columns for v in tr[1](*([(row[i] if i < len(row) else None) for i in tr[2]] + (tr[3] if type(tr[3]) == list else [])), **(tr[3] if type(tr[3]) == dict else {}) )] + [i for name, i in udcs] + key_values
 
 def create_keys(used_keys, keys, sources):
     key_values = {}
@@ -153,7 +106,7 @@ def process_parallel(p_conf, keys, univ_conf, connection):
     try:
         for table, table_conf in p_conf['tables'].iteritems():
             if not fs.has_key(table_conf['filename']):
-                fs[table_conf['filename']] = utffile(table_conf['filename'], 'rb') if univ_conf['use_utf'] else open(table_conf['filename'],'rb')
+                fs[table_conf['filename']] = utffile(table_conf['filename'], 'rU') if univ_conf['use_utf'] else open(table_conf['filename'],'rU')
             #buf[table] = StringIO()
             if not csvr.has_key(table_conf['filename']):
                 csvr[table_conf['filename']] = csv.reader(fs[table_conf['filename']], quotechar=quote_char[table], delimiter=field_sep[table])
@@ -303,7 +256,7 @@ def process_table(table_conf, univ_conf, connection):
     quote_char = table_conf['quotechar']
     copy_every = int(table_conf['copy_every'])
     cursor = connection.cursor()
-    with utffile(table_conf['filename'],'rb') if univ_conf['use_utf'] else open(table_conf['filename'], 'rb') as f:
+    with utffile(table_conf['filename'],'rU') if univ_conf['use_utf'] else open(table_conf['filename'], 'rU') as f:
         bufs = None
         x = 0
         ptime = 0
@@ -333,7 +286,8 @@ def process_table(table_conf, univ_conf, connection):
             bufs = {table_conf['table']:buf}
             csvw = csv.writer(bufs[table_conf['table']])
             def write(l):
-                csvw.writerow(process_data(l, numbered_columns, transformed_columns, udcs))
+                p = process_data(l, numbered_columns, transformed_columns, udcs)
+                csvw.writerow(p)
             def copy_sql(key,ctime):
                 bufs[table_conf['table']].seek(0)
                 ctime -= time.time()
@@ -448,10 +402,5 @@ def new_process_copies(config_module, connection=None):
         if local_connection:
             connection.close()
 
-def process_copies(config_file):
-    universal_conf, table_confs = parse_config(config_file)
-    connection = db_connect(universal_conf)
-    for table in table_confs:
-        process_table(table_confs[table], universal_conf, connection)
 if __name__ == "__main__":
     new_process_copies(imp.load_source('config',sys.argv[1]))

@@ -4,3 +4,4 @@
 *.csv
 !randoms_small.csv
 univ_settings.py
+password.py
