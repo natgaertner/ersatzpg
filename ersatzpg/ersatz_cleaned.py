@@ -97,38 +97,36 @@ class Table:
             self.buf = bufs
             csvws = dict([(k, csv.writer(v)) for k,v in self.buf.iteritems()])
             self.csvw = csvws
-            def write(l, table):
+            def write(l,key_values=None):
                 p = process_data(l, self.numbered_columns, self.transformed_columns, self.udcs, [key_values[k] for n,k in self.key_columns])
                 part = dict((k,p[v]) for k,v in self.processed_data_indexes.iteritems())
                 self.csvw[self.pattern.format(**part)].writerow(p)
-            def copy_sql(key,table,ct,cursor):
+            def copy_sql(key,cursor):
                 sql_formatted = self.sql_pattern.format(table_def=self.table_def_pattern.format(table=key))
                 b = self.buf[key]
                 b.seek(0)
-                ct -= time.time()
+                self.ctime -= time.time()
                 cursor.copy_expert(sql_formatted, b)
-                ct += time.time()
+                self.ctime += time.time()
                 b.close()
                 self.buf[key] = StringIO()
                 self.csvw[key] = csv.writer(self.buf[key])
-                return ct
         else:
             b = StringIO()
             bufs = {table_conf['table']:b}
             self.buf = bufs
             self.csvw = csv.writer(b)
-            def write(l, table):
+            def write(l,key_values=None):
                 self.csvw.writerow(process_data(l, self.numbered_columns, self.transformed_columns, self.udcs, [key_values[k] for n,k in self.key_columns]))
-            def copy_sql(key,table,ct,cursor):
+            def copy_sql(key,cursor):
                 b = self.buf[key]
                 b.seek(0)
-                ct -= time.time()
+                self.ctime -= time.time()
                 cursor.copy_expert(self.sql, b)
-                ct += time.time()
+                self.ctime += time.time()
                 b.close()
                 self.buf[key] = StringIO()
                 self.csvw = csv.writer(self.buf[key])
-                return ct
         self.write = write
         self.copy_sql = copy_sql
 
@@ -148,183 +146,92 @@ def process_parallel(p_conf, keys, univ_conf, connection):
             table_class = table_classes[table]
             if not fs.has_key(table_conf['filename']):
                 fs[table_conf['filename']] = utffile(table_conf['filename'], 'rU') if univ_conf['use_utf'] else open(table_conf['filename'],'rU')
-            #buf[table] = StringIO()
             if not csvr.has_key(table_conf['filename']):
-                #csvr[table_conf['filename']] = csv.reader(fs[table_conf['filename']], quotechar=quote_char[table], delimiter=field_sep[table])
                 csvr[table_conf['filename']] = csv.reader(fs[table_conf['filename']], quotechar=table_class.quote_char, delimiter=table_class.field_sep)
                 if table_conf.has_key('skip_head_lines'):
                     shl = int(table_conf['skip_head_lines'])
                     for i in range(shl):
                         csvr[table_conf['filename']].next()
                 generators.append(((table_conf['filename'],l) for l in csvr[table_conf['filename']]))
-            #csvw[table] = csv.writer(buf[table])
         x = 0
+        writers = {}
+        for table in p_conf['tables']:
+            writers[table] = sql_writer(table_classes[table],univ_conf,cursor)
+            writers[table].next()
         for lines in izip(*generators):
             lines = dict(lines)
             key_values = create_keys(used_keys, keys, univ_conf['key_sources'])
             x+=1
             for table, table_conf in p_conf['tables'].iteritems():
-                table_class = table_classes[table]
-                #ptime[table] -= time.time()
-                table_class.ptime -= time.time()
+                #table_class = table_classes[table]
+                #table_class.ptime -= time.time()
                 l = lines[table_conf['filename']]
-                try:
-                    #write_dict[table](l, table)
-                    table_class.write(l,table)
-                except Exception, error:
-                    if univ_conf['debug']:
-                        import traceback; print traceback.format_exc()
-                        import pdb; pdb.set_trace()
-                    else:
-                        raise error
-                #ptime[table] += time.time()
-                table_class.ptime += time.time()
-                #if x % copy_every[table] == 0:
-                if x % table_class.copy_every == 0:
-                    #print "Copying {num} lines in table {table}".format(num=copy_every[table],table=table)
-                    print "Copying {num} lines in table {table}".format(num=table_class.copy_every,table=table)
-                    #for k,v in buf[table].iteritems():
-                    for k,v in table_class.buf.iteritems():
-                        try:
-                            #ctime[table] = copy_sql_dict[table](k, table,ctime[table])
-                            table_class.ctime = table_class.copy_sql(k,table,table_class.ctime,cursor)
-                        except Exception, error:
-                            if univ_conf['debug']:
-                                import traceback; print traceback.format_exc()
-                                import pdb; pdb.set_trace()
-                            else:
-                                raise error
-                    #print "Time spent on building buffer for table {table}: {num}".format(table=table, num=ptime[table])
-                    print "Time spent on building buffer for table {table}: {num}".format(table=table, num=table_class.ptime)
-                    #print "Time spent copying table {table}: {num}".format(table=table, num=ctime[table])
-                    print "Time spent copying table {table}: {num}".format(table=table, num=table_class.ctime)
-                    #ctime = 0
-                    #ptime[table] = 0
-        #for t in buf:
-        for table, table_conf in p_conf['tables'].iteritems():
-            table_class = table_classes[table]
-            #print "Copying {num} lines in table {table}".format(num=(x % copy_every[t]), table=t)
-            print "Copying {num} lines in table {table}".format(num=(x % table_class.copy_every), table=table)
-            #for k,v in buf[t].iteritems():
-            for k,v in table_class.buf.iteritems():
-                try:
-                    #ctime[t] = copy_sql_dict[table](k,t,ctime[t])
-                    table_class.ctime = table_class.copy_sql(k,table,table_class.ctime,cursor)
-                except Exception, error:
-                    if univ_conf['debug']:
-                        import traceback; print traceback.format_exc()
-                        import pdb; pdb.set_trace()
-                    else:
-                        raise error
-
-            #print "Time spent on building buffer: %s" % ptime[t]
-            print "Time spent on building buffer: %s" % table_class.ptime
-            #print "Time spent copying: %s" % ctime[t]
-            print "Time spent copying: %s" % table_class.ctime
-            #ctime = 0
+                writers[table].send((l,key_values))
+        for table in p_conf['tables']:
+            writers[table].close()
     finally:
         for f in fs.values():
             f.close()
 
 def process_table(table_conf, univ_conf, connection):
-    numbered_columns, transformed_columns, udcs, keys = new_process_columns(table_conf)
-    processed_data_columns = [name for name, i in numbered_columns]+[n for names, f, i, d in transformed_columns for n in names] + [name for name, t in udcs]
-    table_def = "%s(%s)" % (table_conf['table'],','.join(processed_data_columns))
-    force_not_null = 'FORCE NOT NULL ' + ','.join(s.strip() for s in table_conf['force_not_null']) if table_conf.has_key('force_not_null') else ''
-    sql = "COPY %s from STDOUT WITH CSV %s" % (table_def, force_not_null)
-    sql_pattern = "COPY {{table_def}} from STDOUT WITH CSV {force_not_null}".format(force_not_null=force_not_null)
-    table_def_pattern = "{{table}}({columns})".format(columns=','.join(processed_data_columns))
-    field_sep = table_conf['field_sep']
-    quote_char = table_conf['quotechar']
-    copy_every = int(table_conf['copy_every'])
+    table_class = Table(table_conf)
     cursor = connection.cursor()
     with utffile(table_conf['filename'],'rU') if univ_conf['use_utf'] else open(table_conf['filename'], 'rU') as f:
         bufs = None
         x = 0
-        ptime = 0
-        ctime = 0
-        if table_conf.has_key('partitions'):
-            pattern = table_conf['partition_table_pattern']
-            processed_data_indexes = dict(zip(processed_data_columns, range(len(processed_data_columns))))
-            bufs = dict([(pattern.format(**perm), StringIO()) for perm in permutation_tuple_generator(table_conf['partitions'])])
-            csvws = dict([(k, csv.writer(v)) for k,v in bufs.iteritems()])
-            def write(l):
-                p = process_data(l, numbered_columns, transformed_columns, udcs)
-                part = dict((k,p[v]) for k,v in processed_data_indexes.iteritems())
-                csvws[pattern.format(**part)].writerow(p)
-            def copy_sql(key,ctime):
-                sql_formatted = sql_pattern.format(table_def=table_def_pattern.format(table=key))
-                b = bufs[key]
-                b.seek(0)
-                ctime -= time.time()
-                cursor.copy_expert(sql_formatted, b)
-                ctime += time.time()
-                b.close()
-                bufs[key] = StringIO()
-                csvws[key] = csv.writer(bufs[key])
-                return ctime
-        else:
-            buf = StringIO()
-            bufs = {table_conf['table']:buf}
-            csvw = csv.writer(bufs[table_conf['table']])
-            def write(l):
-                p = process_data(l, numbered_columns, transformed_columns, udcs)
-                csvw.writerow(p)
-            def copy_sql(key,ctime):
-                bufs[table_conf['table']].seek(0)
-                ctime -= time.time()
-                cursor.copy_expert(sql, bufs[table_conf['table']])
-                ctime += time.time()
-                bufs[table_conf['table']].close()
-                bufs[table_conf['table']] = StringIO()
-                #csvw = csv.writer(bufs[table_conf['table']])
-                return ctime
-
-        csvr = csv.reader(f, quotechar=quote_char, delimiter=field_sep)
+        csvr = csv.reader(f, quotechar=table_class.quote_char, delimiter=table_class.field_sep)
         if table_conf.has_key('skip_head_lines'):
             shl = int(table_conf['skip_head_lines'])
             for i in range(shl):
                 csvr.next()
-        for l  in csvr:
-            ptime -= time.time()
+        writer = sql_writer(table_class,univ_conf,cursor)
+        writer.next()
+        for l in csvr:
+            writer.send((l,None))
+        writer.close()
+
+def sql_writer(table_class,univ_conf,cursor):
+    x = 0
+    try:
+        while True:
+            l,key_values = (yield)
+            table_class.ptime -= time.time()
             try:
-                write(l)
+                table_class.write(l,key_values)
             except Exception, error:
                 if univ_conf['debug']:
                     import traceback; print traceback.format_exc()
                     import pdb; pdb.set_trace()
                 else:
                     raise error
-            ptime += time.time()
+            table_class.ptime += time.time()
             x+=1
-            if x % copy_every == 0:
-                print "Copying %s lines" % copy_every
-                for k,v in bufs.iteritems():
+            if x % table_class.copy_every == 0:
+                print "Copying {copy_every} lines".format(copy_every=table_class.copy_every)
+                for k,v in table_class.buf.iteritems():
                     try:
-                        ctime = copy_sql(k, ctime)
-                        csvw = csv.writer(bufs[table_conf['table']])
+                        table_class.copy_sql(k,cursor)
                     except Exception, error:
                         if univ_conf['debug']:
                             import traceback; print traceback.format_exc()
                             import pdb; pdb.set_trace()
                         else:
                             raise error
-                print "Time spent on building buffer: %s" % ptime
-                print "Time spent copying: %s" % ctime
-                ptime = 0
-                ctime = 0
-        print "Copying %s lines" % (x % copy_every)
-        for k,v in bufs.iteritems():
+                print "Time spent on building buffer: {ptime}".format(ptime=table_class.ptime)
+                print "Time spent copying: {ctime}".format(ctime=table_class.ctime)
+    except GeneratorExit:
+        print "Copying {copy_every} lines".format(copy_every=(x % table_class.copy_every))
+        for k,v in table_class.buf.iteritems():
             try:
-                ctime = copy_sql(k,ctime)
+                table_class.copy_sql(k,cursor)
             except Exception, error:
                 if univ_conf['debug']:
                     import traceback; print traceback.format_exc()
                     import pdb; pdb.set_trace()
                 else:
                     raise error
-        print "Time spent on building buffer: %s" % ptime
-        print "Time spent copying: %s" % ctime
+        print "Time spent on building buffer: {ptime}".format(ptime=table_class.ptime)
+        print "Time spent copying: {ctime}".format(ctime=table_class.ctime)
 
 def new_process_copies(config_module, connection=None):
     universal_conf, table_confs, parallel_confs, keys = new_process_config(config_module.ERSATZPG_CONFIG)
