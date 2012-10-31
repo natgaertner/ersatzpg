@@ -2,10 +2,6 @@ from data.univ_settings import ERSATZPG_CONFIG
 from collections import OrderedDict
 DEFAULT_TABLE = {
         'skip_head_lines':0,
-        'format':'csv',
-        'field_sep':',',
-        'quotechar':'"',
-        'copy_every':100000,
         'udcs':{
             },
         }
@@ -19,7 +15,7 @@ PART_TEST.update({
             ('column2',(0,1,2,3,4,5,6,7,8,9)),
             ]),
     'partition_table_pattern':'part_test_{column1}_{column2}',
-    'filename':'/home/gaertner/code/pgloader_stripped/examples/randoms_small.csv',
+    'filename':'/home/gaertner/code/ersatzpg/examples/randoms_small.csv',
     'field_sep':',',
     'columns':{
         'column1':1,
@@ -39,14 +35,14 @@ PART_TEST2.update({
     #        ('column7',(0,1,2,3,4,5,6,7,8,9)),
     #        ]),
     #'partition_table_pattern':'part_test2_{column6}_{column7}',
-    'filename':'/home/gaertner/code/pgloader_stripped/examples/randoms_small.csv',
+    'filename':'/home/gaertner/code/ersatzpg/examples/randoms_small.csv',
     'field_sep':',',
     'columns':{
         'column6':6,
         'column7':7,
         'column8':8,
         'column9':9,
-        'column10':10,
+        'column10':{'key':'test_key'},
         },
     })
 ERSATZPG_CONFIG.update({
@@ -54,7 +50,7 @@ ERSATZPG_CONFIG.update({
         'part_test':PART_TEST,
         'part_test2':PART_TEST2,
         },
-    'parallel_load':({'tables':('part_test','part_test2'),'keys':{}},),
-    'key_sources':{},
+    'parallel_load':({'tables':('part_test','part_test2'),'keys':{'test_key':'test_key_source'}},),
+    'key_sources':{'test_key_source':1},
     })
 
