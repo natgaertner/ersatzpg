@@ -1,0 +1,14 @@
+ERSATZ
+A tool for loading csvs in postgresql databases quickly
+
+postgresql's copy command is just fine for bulk-loading CSVs into a table if those CSVs are already formatted to exactly match the table columns and data types. It even lets you load a subset of the table's columns from the CSV.
+Unfortunately, it doesn't let you:
+Load a subset of the CSV's columns
+Transform columns from the CSV before insertion
+Combine columns
+Insert directly into partition tables
+Define default column values
+Load multiple tables from different subsets of a CSV (and define a sequential key for linking those tables later)
+
+An old module, pgloader (http://pgfoundry.org/projects/pgloader), will let you do some of these things but is somewhat limited and seemed kind of slow.
+Ersatz is an attempt to provide all the functionality above and achieve fast copy rates. It is dependent on psycopg2 (http://www.initd.org/psycopg/) for its postrgres interface.
