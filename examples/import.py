@@ -2,7 +2,7 @@ import os,sys
 from collections import OrderedDict
 os.chdir('..')
 sys.path.append('.')
-from ersatzpg import ersatz, create_partitions as cp
+from ersatzpg import ersatz,ersatz_threaded, create_partitions as cp
 from examples import test_part
 conf = test_part.ERSATZPG_CONFIG
 connection = ersatz.db_connect(conf)
@@ -23,4 +23,5 @@ connection.commit()
 connection.close()
 
 #run the import
-ersatz.new_process_copies(test_part)
+#ersatz.new_process_copies(test_part)
+ersatz_threaded.new_process_copies(test_part)
