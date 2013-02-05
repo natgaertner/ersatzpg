@@ -1,5 +1,5 @@
 ERSATZ
-A tool for loading csvs in postgresql databases quickly
+A tool for loading csvs into postgresql databases quickly
 
 postgresql's copy command is just fine for bulk-loading CSVs into a table if those CSVs are already formatted to exactly match the table columns and data types. It even lets you load a subset of the table's columns from the CSV.
 Unfortunately, it doesn't let you:
