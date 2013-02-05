@@ -16,7 +16,7 @@ Ersatz is an attempt to provide all the functionality above and achieve fast cop
 An example of the arcane configuration is included. Look in the examples directory. test_part.py is the configuration file. import.py is a script that runs ersatz pointed at the configuration. 
 Some config explanation:
 Most of the configuration is in dictionaries, which allows you to create default values and update copies of the default dictionary with specific config values for tables.
-univ_settings.py contains some basic stuff: database connection values (user, db name, password. (assumes the existence of a password file that contains a passwd value)
+univ_settings.py contains some basic stuff: database connection values (user, db name, password. (assumes the existence of a password file that contains a passwd value. This can easily be changed to an environment variable setting or whatever password storing scheme you prefer)
 test_part.py contains the table definitions.
 Table-specific config values:
 skip_head_lines is how much header to skip
@@ -26,7 +26,7 @@ partitions is an ordered dict of column names to values to partitiion on
 partition_table_pattern is the python format string to create partition table names with
 filename is the csv to import from
 field_sep is the csv field separator
-columns is a dict of column names to:
+columns is a dict of column names to one of:
     integer: a column in the csv
     dict with one key: 'key' and a value indicating the externally defined sequential key to use for this field
     dict with keys: 'function': a function returning a tuple of values, 'columns': a tuple of integers indicating which columns of the csv to pass to the function, 'defaults': a dict of default values and their parameter names to pass to the function. In this case the column dict key can be a single column name or a tuple of column names depending on how many values are in the function's return tuple.
