@@ -51,7 +51,7 @@ def new_process_config(universal_config):
 
     """
     universal_config_dict = {'reformat_path':None, 'debug': False, 'use_utf': False, 'testonly': False, 'parallel_load': ()}
-    table_config_dict = defaultdict(lambda: {'copy_every':100000, 'format':'csv','field_sep':',','quotechar':'"'})
+    table_config_dict = defaultdict(lambda: {'dict_reader':False,'copy_every':100000, 'format':'csv','field_sep':',','quotechar':'"'})
     universal_config_dict.update(universal_config)
     for t in universal_config_dict['tables']:
         table_config_dict[t].update(universal_config_dict['tables'][t])
@@ -93,44 +93,55 @@ def db_connect(config):
 def new_process_columns(table_conf):
     """convert the column definitions in a table into lists of column definitions separated by type
     columns may be of 3 types:
-        numbered columns - These are columns where the source is indicated by a column number in the source file
+        single columns - These are columns where the source is indicated by a column number in the source file
         transformed columns - These are columns where the source is a function applied to a collection of columns. One function may be specified, along with an arbitrary number of input columns specified as column numbers in the source file, default arguments to the function, and an arbitrary number of output columns, each of which will be populated by the function's return values (the number of specified output columns must match the number of function return values)
         key columns - These are columns where the source is a sequential key from a source defined in the universal config. These are only used in tables that are processed in parallel. (So that two tables loaded in parallel can share a key and be linked together). If you want a key for an indidivual table, a default value set to a sequence in the SQL table definition should suffice, but I am open to hearing use cases for this in ersatz.
     returns:
-        numbered_columns - a list of 2-tuples of the form (name, column number)
+        single_columns - a list of 2-tuples of the form (name, column number)
         transformed_columns - a list of 4-tuples of the form (return value(s), function, argument columns, default arguments)
         udcs - a list of 2-tuples of the form (name, default value)
         key_columns - a list of tuples of the form (name, key_name)
 
     """
-    numbered_columns = []
+    single_columns = []
     transformed_columns = []
     key_columns = []
     columns = table_conf['columns']
-    for k,v in columns.iteritems():
-        if type(v) == int and type(k) == str:
-            numbered_columns.append((k,v-1))
-        elif type(v) == dict and v.has_key('function') and (type(k) == str or type(k) == tuple):
-            transformed_columns.append(((k,) if type(k) == str else k, v['function'], [i-1 for i in v['columns']], v['defaults'] if v.has_key('defaults') else {}))
-        elif type(v) == dict and v.has_key('key'):
-            key_columns.append((k,v['key']))
-        else:
-            raise Exception('Invalid column definition in table {table}: key(s):{k} value:{v}'.format(table=table_conf['table'], k=k, v=v))
+    if table_conf['dict_reader']:
+        for k,v in columns.iteritems():
+            if type(v) == str and type(k) == str:
+                single_columns.append((k,v))
+            elif type(v) == dict and v.has_key('function') and (type(k) == str or type(k) == tuple):
+                transformed_columns.append(((k,) if type(k) == str else k, v['function'], [s for s in v['columns']], v['defaults'] if v.has_key('defaults') else {}))
+            elif type(v) == dict and v.has_key('key'):
+                key_columns.append((k,v['key']))
+            else:
+                raise Exception('Invalid column definition in table {table}: key(s):{k} value:{v}'.format(table=table_conf['table'], k=k, v=v))
+    else:
+        for k,v in columns.iteritems():
+            if type(v) == int and type(k) == str:
+                single_columns.append((k,v-1))
+            elif type(v) == dict and v.has_key('function') and (type(k) == str or type(k) == tuple):
+                transformed_columns.append(((k,) if type(k) == str else k, v['function'], [i-1 for i in v['columns']], v['defaults'] if v.has_key('defaults') else {}))
+            elif type(v) == dict and v.has_key('key'):
+                key_columns.append((k,v['key']))
+            else:
+                raise Exception('Invalid column definition in table {table}: key(s):{k} value:{v}'.format(table=table_conf['table'], k=k, v=v))
     udcs = [(k,v) for k,v in table_conf['udcs'].iteritems()] if table_conf.has_key('udcs') else []
-    return numbered_columns, transformed_columns, udcs, key_columns
+    return single_columns, transformed_columns, udcs, key_columns
 
-def _process_data(row, numbered_columns, transformed_columns,udcs, key_values = [], dict_reader=False):
-    #grab directly numbered columns from a split row from the input file, run the row through the column transformations and append default and key sourced values. A hook for reading columns via csv.DictReader exist here but TODO deal with opening files for parallel load with dict/number specified different ways
+def _process_data(row, single_columns, transformed_columns,udcs, key_values = [], dict_reader=False):
+    #grab directly single columns from a split row from the input file, run the row through the column transformations and append default and key sourced values. A hook for reading columns via csv.DictReader exist here but TODO deal with opening files for parallel load with dict/number specified different ways
     if dict_reader:
-        numbered = [row[h] for name, h in numbered_columns]
+        single = [row[h] for name, h in single_columns]
         transformed = [v for tr in transformed_columns for v in tr[1](*([row[h] for h in tr[2]] + (tr[3] if type(tr[3]) == list else [])), **(tr[3] if type(tr[3]) == dict else {}))]
         default = [h for name, h in udcs]
-        return numbered + transformed + default + key_values
+        return single + transformed + default + key_values
     else:
-        numbered = [(row[i] if i < len(row) else None) for name,i in numbered_columns]
+        single = [(row[i] if i < len(row) else None) for name,i in single_columns]
         transformed = [v for tr in transformed_columns for v in tr[1](*([(row[i] if i < len(row) else None) for i in tr[2]] + (tr[3] if type(tr[3]) == list else [])), **(tr[3] if type(tr[3]) == dict else {}) )]
         default = [i for name, i in udcs]
-    return numbered + transformed + default + key_values
+    return single + transformed + default + key_values
 
 def _create_keys(used_keys, keys, sources):
     #Grab specified key values from key sources and increment sources. Has to happen all at once for all keys so sources only increment once per row
@@ -144,7 +155,7 @@ class Table:
     """Class for grouping together all the stuff that is processed for a given table. This can be applied regardless of whether the table is being loaded in parallel or individually. The internals here will handle the cases where the table is being loaded into partitions or straight into one table.
     Fields:
         from new_process_columns:
-            numbered_columns
+            single_columns
             transformed_columns
             udcs
             key_columns
@@ -177,8 +188,8 @@ class Table:
         takes table config object, universal config object, and psycopg cursor object
 
         """
-        self.numbered_columns, self.transformed_columns, self.udcs, self.key_columns = new_process_columns(table_conf)
-        self.processed_data_columns = [name for name, i in self.numbered_columns]+[n for names, f, i, d in self.transformed_columns for n in names] + [name for name, t in self.udcs] + [name for name, t in self.key_columns]
+        self.single_columns, self.transformed_columns, self.udcs, self.key_columns = new_process_columns(table_conf)
+        self.processed_data_columns = [name for name, i in self.single_columns]+[n for names, f, i, d in self.transformed_columns for n in names] + [name for name, t in self.udcs] + [name for name, t in self.key_columns]
         self.table_def = "{table}({columns})".format(table=table_conf['table'],columns=','.join(self.processed_data_columns))
         self.force_not_null = 'FORCE NOT NULL ' + ','.join(s.strip() for s in table_conf['force_not_null']) if table_conf.has_key('force_not_null') else ''
         self.sql_pattern = "COPY {{table_def}} from STDOUT WITH CSV {force_not_null}".format(force_not_null=self.force_not_null)
@@ -186,6 +197,7 @@ class Table:
         self.field_sep = table_conf['field_sep']
         self.quote_char = table_conf['quotechar']
         self.copy_every = int(table_conf['copy_every'])
+        self.dict_reader = table_conf['dict_reader']
         self.ptime = 0
         self.ctime = 0
         if table_conf.has_key('partitions'):
@@ -194,7 +206,7 @@ class Table:
             self.buf = dict([(self.pattern.format(**perm), StringIO()) for perm in permutation_tuple_generator(table_conf['partitions'])])
             self.csvw = dict([(k, csv.writer(v)) for k,v in self.buf.iteritems()])
             def write(self,l,key_values=None):
-                p = _process_data(l, self.numbered_columns, self.transformed_columns, self.udcs, [key_values[k] for n,k in self.key_columns])
+                p = _process_data(l, self.single_columns, self.transformed_columns, self.udcs, [key_values[k] for n,k in self.key_columns],self.dict_reader)
                 part = dict((k,p[v]) for k,v in self.processed_data_indexes.iteritems())
                 key = self.pattern.format(**part)
                 self.csvw[key].writerow(p)
@@ -202,7 +214,7 @@ class Table:
             self.buf = {table_conf['table']:StringIO()}
             self.csvw = {table_conf['table']:csv.writer(self.buf[table_conf['table']])}
             def write(self,l,key_values=None):
-                p = _process_data(l, self.numbered_columns, self.transformed_columns, self.udcs, [key_values[k] for n,k in self.key_columns])
+                p = _process_data(l, self.single_columns, self.transformed_columns, self.udcs, [key_values[k] for n,k in self.key_columns], self.dict_reader)
                 self.csvw[table_conf['table']].writerow(p)
         self.write = new.instancemethod(write,self,Table)
         self.writer = _sql_writer(self,univ_conf,cursor)
@@ -249,12 +261,18 @@ def process_parallel(p_conf, keys, univ_conf, connection):
             if not fs.has_key(table_conf['filename']):
                 fs[table_conf['filename']] = utffile(table_conf['filename'], 'rU') if univ_conf['use_utf'] else open(table_conf['filename'],'rU')
             if not csvr.has_key(table_conf['filename']):
-                csvr[table_conf['filename']] = csv.reader(fs[table_conf['filename']], quotechar=table_class.quote_char, delimiter=table_class.field_sep)
-                if table_conf.has_key('skip_head_lines'):
-                    shl = int(table_conf['skip_head_lines'])
-                    for i in range(shl):
-                        csvr[table_conf['filename']].next()
+                if table_conf['dict_reader']:
+                    csvr[table_conf['filename']] = csv.DictReader(fs[table_conf['filename']],quotechar=table_class.quote_char, delimiter=table_class.field_sep)
+                else:
+                    csvr[table_conf['filename']] = csv.reader(fs[table_conf['filename']], quotechar=table_class.quote_char, delimiter=table_class.field_sep)
+                    if table_conf.has_key('skip_head_lines'):
+                        shl = int(table_conf['skip_head_lines'])
+                        for i in range(shl):
+                            csvr[table_conf['filename']].next()
                 generators.append(((table_conf['filename'],l) for l in csvr[table_conf['filename']]))
+            elif isinstance(csvr[table_conf['filename']], csv.DictReader) != table_conf['dict_reader']:
+                raise Exception('Improper Configuration: {table} is configured to {not1} use csv.DictReader but another table loaded from the same file is configured to {not2} use csv.DictReader. (the default is to not use it, so it must be specified on every table config for that file)'.format(table=table_conf['table'],not1=('not' if table_conf['dict_reader'] else ''), not2=('' if table_conf['dict_reader'] else 'not')))
+
         for lines in izip(*generators):
             lines = dict(lines)
             key_values = _create_keys(used_keys, keys, univ_conf['key_sources'])
@@ -278,11 +296,14 @@ def process_table(table_conf, univ_conf, connection):
     cursor = connection.cursor()
     table_class = Table(table_conf,univ_conf, cursor)
     with utffile(table_conf['filename'],'rU') if univ_conf['use_utf'] else open(table_conf['filename'], 'rU') as f:
-        csvr = csv.reader(f, quotechar=table_class.quote_char, delimiter=table_class.field_sep)
-        if table_conf.has_key('skip_head_lines'):
-            shl = int(table_conf['skip_head_lines'])
-            for i in range(shl):
-                csvr.next()
+        if table_conf['dict_reader']:
+            csvr = csv.DictReader(f,quotechar=table_class.quote_char,delimiter=table_class.field_sep)
+        else:
+            csvr = csv.reader(f, quotechar=table_class.quote_char, delimiter=table_class.field_sep)
+            if table_conf.has_key('skip_head_lines'):
+                shl = int(table_conf['skip_head_lines'])
+                for i in range(shl):
+                    csvr.next()
         for l in csvr:
             table_class.writer.send((l,None))
         table_class.writer.close()
